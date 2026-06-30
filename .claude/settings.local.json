@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n getdiskhealth.sh)",
+      "Bash(bash -n install.sh)",
+      "Bash(bash -n server/scripts/mint-token.sh)",
+      "Bash(python -c \"import ast,sys; ast.parse\\(open\\('server/ingest/app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('server/ingest/app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+# Caddy terminates TLS (auto Let's Encrypt) and routes traffic.
+#
+#   /ingest*  -> ingest service (per-device bearer token checked there)
+#   /*        -> Grafana (its own login)
+#
+# InfluxDB is never exposed here; only ingest + grafana talk to it internally.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	handle /ingest* {
+		reverse_proxy ingest:8080
+	}
+
+	handle {
+		reverse_proxy grafana:3000
+	}
+}

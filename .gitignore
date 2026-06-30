@@ -1,0 +1,6 @@
+# Secrets and per-instance state — never commit these
+server/.env
+server/ingest/tokens.json
+
+# Local logs
+*.log
