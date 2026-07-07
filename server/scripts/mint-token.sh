@@ -28,8 +28,10 @@ if [[ -f "$ENV_FILE" ]]; then
   DOMAIN="${DOMAIN:-disk-health.example.com}"
 fi
 
-# Set REPO_RAW in your environment to your fork's raw base if needed.
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/YOURORG/DiskHealth/main}"
+# Your fork's clone URL and the tag to pin devices to (git checkout).
+# Override either in the environment if needed.
+REPO_GIT="${REPO_GIT:-https://github.com/YOURORG/DiskHealth.git}"
+REF="${REF:-v1.0.0}"
 
 [[ -f "$TOKENS_FILE" ]] || echo '{}' > "$TOKENS_FILE"
 
@@ -56,7 +58,9 @@ Minted token for device '$DEVICE_ID'.
 
 Run this on the target Ubuntu device:
 
-  curl -fsSL $REPO_RAW/install.sh | sudo bash -s -- \\
+  git clone $REPO_GIT
+  cd DiskHealth && git checkout $REF
+  sudo ./install.sh \\
       --endpoint https://$DOMAIN \\
       --token $TOKEN
 

@@ -17,7 +17,8 @@ one central server over HTTPS, authenticated with a **per-device bearer token**.
 | Path | What it is |
 |---|---|
 | [getdiskhealth.sh](getdiskhealth.sh) | Device collector: enumerates internal disks, runs `smartctl`, POSTs raw JSON |
-| [install.sh](install.sh) | One-line installer (curl-pipe): deps, config, nightly cron |
+| [install.sh](install.sh) | One-line installer (curl-pipe): deps, config, nightly cron, SHA256 verify |
+| [scripts/cut-release.sh](scripts/cut-release.sh) | Stamp + tag an immutable, hash-pinned release |
 | [server/docker-compose.yml](server/docker-compose.yml) | The full server stack |
 | [server/ingest/app.py](server/ingest/app.py) | Auth + normalization + InfluxDB writes |
 | [server/Caddyfile](server/Caddyfile) | TLS termination + routing |

@@ -1,22 +1,39 @@
 #!/usr/bin/env bash
 #
-# install.sh — one-shot installer for the DiskHealth collection agent.
+# install.sh — installer for the DiskHealth collection agent.
 #
-# Intended to be piped straight into a root shell, e.g.:
+# Primary (recommended) usage — clone the repo and run locally:
 #
-#   curl -fsSL https://raw.githubusercontent.com/YOURORG/DiskHealth/main/install.sh \
-#     | sudo bash -s -- \
-#         --endpoint https://disk-health.example.com \
-#         --token tok_xxxxxxxxxxxxxxxx
+#   git clone https://github.com/YOURORG/DiskHealth.git
+#   cd DiskHealth              # optional: git checkout v1.0.0 to pin
+#   sudo ./install.sh --endpoint https://disk-health.example.com --token tok_xxxx
 #
-# It installs dependencies, drops the collection script, writes the device
-# config (with the per-device bearer token), and registers a nightly cron job
-# at a randomized minute so fleets don't all post at once.
+# When run from a checkout it installs the getdiskhealth.sh sitting next to it —
+# no download, integrity provided by git.
+#
+# Fallback usage — curl-pipe (no local copy present). It then fetches the
+# collector from the pinned release and verifies its SHA256:
+#
+#   curl -fsSL https://raw.githubusercontent.com/YOURORG/DiskHealth/v1.0.0/install.sh \
+#     | sudo bash -s -- --endpoint https://... --token tok_xxxx
+#
+# Either way it installs dependencies, drops the collector, writes the device
+# config (with the per-device bearer token), and registers a nightly cron job at
+# a randomized minute so fleets don't all post at once.
 
 set -euo pipefail
 
-# Where to fetch getdiskhealth.sh from. Override with --repo-raw if you fork.
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/YOURORG/DiskHealth/main}"
+# --- fallback (curl-pipe) settings; unused when run from a checkout -----------
+# Immutable release ref the collector is pulled from. Override with --ref.
+REF="${REF:-v1.0.0}"
+# Base raw URL of your fork (no trailing ref). Override with --repo-base.
+REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/YOURORG/DiskHealth}"
+# Expected SHA256 of getdiskhealth.sh for this release. Stamped by
+# scripts/cut-release.sh. Override at install time with --sha256.
+EXPECTED_SHA256="${EXPECTED_SHA256:-REPLACE_WITH_SHA256}"
+
+# Directory this script lives in (empty when piped via curl).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 
 ENDPOINT=""
 TOKEN=""
@@ -30,7 +47,9 @@ Usage: install.sh --endpoint URL --token TOKEN [options]
   --endpoint URL    Central ingest base URL (e.g. https://disk-health.example.com)
   --token TOKEN     Per-device bearer token (mint one on the server)
   --hour N          Nightly run hour, 0-23 local time (default: 2)
-  --repo-raw URL    Base raw URL to fetch getdiskhealth.sh from
+  --ref REF         Release tag/commit to fetch the collector from (default: $REF)
+  --repo-base URL   Base raw URL of your fork (no ref)
+  --sha256 HASH     Expected SHA256 of getdiskhealth.sh (overrides built-in)
   --no-run          Do not run a collection immediately after install
   -h, --help        Show this help
 EOF
@@ -38,12 +57,14 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --endpoint) ENDPOINT="$2"; shift 2;;
-    --token)    TOKEN="$2"; shift 2;;
-    --hour)     HOUR="$2"; shift 2;;
-    --repo-raw) REPO_RAW="$2"; shift 2;;
-    --no-run)   RUN_NOW=0; shift;;
-    -h|--help)  usage; exit 0;;
+    --endpoint)  ENDPOINT="$2"; shift 2;;
+    --token)     TOKEN="$2"; shift 2;;
+    --hour)      HOUR="$2"; shift 2;;
+    --ref)       REF="$2"; shift 2;;
+    --repo-base) REPO_BASE="$2"; shift 2;;
+    --sha256)    EXPECTED_SHA256="$2"; shift 2;;
+    --no-run)    RUN_NOW=0; shift;;
+    -h|--help)   usage; exit 0;;
     *) echo "Unknown arg: $1" >&2; usage; exit 1;;
   esac
 done
@@ -63,12 +84,41 @@ install -d -m 755 /opt/disk-health
 install -d -m 700 /etc/disk-health
 install -d -m 700 /var/lib/disk-health/spool
 
-echo "==> Fetching collection script"
-if ! curl -fsSL "$REPO_RAW/getdiskhealth.sh" -o /opt/disk-health/getdiskhealth.sh; then
-  echo "Failed to download getdiskhealth.sh from $REPO_RAW" >&2
-  exit 1
+LOCAL_COLLECTOR="${SCRIPT_DIR:+$SCRIPT_DIR/getdiskhealth.sh}"
+
+if [[ -n "$LOCAL_COLLECTOR" && -f "$LOCAL_COLLECTOR" ]]; then
+  # --- primary path: install the collector from this checkout ----------------
+  echo "==> Installing collector from local checkout"
+  install -m 755 "$LOCAL_COLLECTOR" /opt/disk-health/getdiskhealth.sh
+else
+  # --- fallback path: fetch from the pinned release and verify SHA256 --------
+  REPO_RAW="$REPO_BASE/$REF"
+  TMP_COLLECTOR="$(mktemp)"
+  trap 'rm -f "$TMP_COLLECTOR"' EXIT
+
+  echo "==> No local copy found; fetching collector ($REF)"
+  if ! curl -fsSL "$REPO_RAW/getdiskhealth.sh" -o "$TMP_COLLECTOR"; then
+    echo "Failed to download getdiskhealth.sh from $REPO_RAW" >&2
+    exit 1
+  fi
+
+  echo "==> Verifying integrity"
+  ACTUAL_SHA256="$(sha256sum "$TMP_COLLECTOR" | awk '{print $1}')"
+  if [[ "$EXPECTED_SHA256" == "REPLACE_WITH_SHA256" || -z "$EXPECTED_SHA256" ]]; then
+    echo "    WARNING: no expected SHA256 configured — skipping integrity check."
+    echo "             Stamp one with scripts/cut-release.sh or pass --sha256."
+  elif [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+    echo "!! Integrity check FAILED for getdiskhealth.sh" >&2
+    echo "   expected: $EXPECTED_SHA256" >&2
+    echo "   actual:   $ACTUAL_SHA256" >&2
+    echo "   Refusing to install a collector that doesn't match the pinned release." >&2
+    exit 1
+  else
+    echo "    sha256 verified ($ACTUAL_SHA256)"
+  fi
+
+  install -m 755 "$TMP_COLLECTOR" /opt/disk-health/getdiskhealth.sh
 fi
-chmod 755 /opt/disk-health/getdiskhealth.sh
 
 echo "==> Writing device config"
 umask 077

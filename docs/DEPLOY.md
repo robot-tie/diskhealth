@@ -12,11 +12,12 @@ provisioning section is Lightsail-specific.
 
 - A domain you control (e.g. `example.com`) so you can create a DNS record like
   `disk-health.example.com`. Required for automatic HTTPS.
-- Your DiskHealth repo pushed to GitHub (so `install.sh` and `getdiskhealth.sh`
-  are fetchable by URL). **Edit the `REPO_RAW` default** in
-  [install.sh](../install.sh) and [mint-token.sh](../server/scripts/mint-token.sh)
-  to point at your fork, e.g.
-  `https://raw.githubusercontent.com/youruser/DiskHealth/main`.
+- Your DiskHealth repo pushed to GitHub (so devices can `git clone` it).
+  **Edit the `REPO_GIT` default** in
+  [mint-token.sh](../server/scripts/mint-token.sh) to your fork's clone URL,
+  e.g. `https://github.com/youruser/DiskHealth.git`.
+- **Tag a release** (e.g. `v1.0.0`) so devices pin with `git checkout v1.0.0`
+  instead of tracking `main`. See [§7](#7-cutting-a-release-pinned-installs).
 
 ---
 
@@ -115,18 +116,26 @@ On the **server**, from `DiskHealth/server`:
 ```
 
 It registers the token (hot-reloaded by the ingest service, no restart needed)
-and prints a ready-to-run command. On the **target Ubuntu device**, run it:
+and prints a ready-to-run command. On the **target Ubuntu device**, clone the
+repo and run the installer locally:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/youruser/DiskHealth/main/install.sh \
-  | sudo bash -s -- \
-      --endpoint https://disk-health.example.com \
-      --token tok_xxxxxxxxxxxxxxxxxxxxxxxx
+git clone https://github.com/youruser/DiskHealth.git
+cd DiskHealth
+git checkout v1.0.0        # pin to a release tag
+sudo ./install.sh \
+    --endpoint https://disk-health.example.com \
+    --token tok_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+> Run from a checkout, the installer uses the `getdiskhealth.sh` sitting next to
+> it — no download, integrity provided by git. (If you ever pipe `install.sh`
+> straight from a URL instead, it falls back to fetching the collector from the
+> pinned release and verifying its SHA256.) Mint-token.sh prints this command.
 
 The installer:
 1. installs `smartmontools`, `jq`, `curl`;
-2. drops `/opt/disk-health/getdiskhealth.sh`;
+2. drops `/opt/disk-health/getdiskhealth.sh` (from the local checkout);
 3. writes `/etc/disk-health/config` (mode 600) with the endpoint + token;
 4. registers `/etc/cron.d/disk-health` at a **randomized minute** around 02:00;
 5. runs one collection immediately and reports success.
@@ -178,9 +187,10 @@ locally (harmless). To also stop it collecting, on the device:
 **Update the parsing logic:** edit [server/ingest/app.py](../server/ingest/app.py),
 then `docker compose up -d --build ingest`. No device changes needed.
 
-**Update the collector on the fleet:** push a new `getdiskhealth.sh`; devices
-re-fetch only on reinstall, so either re-run the installer or add a self-update
-step. (For a small fleet, re-running the one-liner is simplest.)
+**Update the collector on the fleet:** cut a new release (below), then on each
+device `cd DiskHealth && git pull && git checkout v1.0.1 && sudo ./install.sh
+--endpoint ... --token ...`. The installer overwrites the collector and cron in
+place; the existing config is re-supplied via the same flags.
 
 **Backups:** Lightsail automatic snapshots cover everything (Influx data lives
 in the `influxdb-data` Docker volume on the instance disk). For off-box backups,
@@ -189,6 +199,40 @@ in the `influxdb-data` Docker volume on the instance disk). For off-box backups,
 **Retention:** set `INFLUX_RETENTION` in `.env` before first boot (`0s` = keep
 forever). To change later, adjust the bucket's retention in the InfluxDB UI or
 via `influx bucket update`.
+
+---
+
+## 7. Cutting a release (pinned installs)
+
+Devices pin with `git checkout v1.0.0`, so cut a release tag whenever
+`getdiskhealth.sh` changes. From the repo root:
+
+```bash
+./scripts/cut-release.sh v1.0.0
+```
+
+This stamps the tag into [mint-token.sh](../server/scripts/mint-token.sh) and
+records `getdiskhealth.sh`'s SHA256 in [install.sh](../install.sh) (the hash is
+only used by the curl-pipe fallback; the git-clone path trusts the checkout).
+Then commit and tag:
+
+```bash
+git add -A
+git commit -m "Release v1.0.0"
+git tag v1.0.0
+git push origin main v1.0.0
+```
+
+From now on, `mint-token.sh` prints install commands pinned to `v1.0.0`. To ship
+a change, bump the version (`v1.0.1`), re-run `cut-release.sh`, and re-tag.
+
+**Hardening that pairs with this:** enable repo **2FA**, **branch protection**
+on `main`, and **tag protection** so tags can't be moved. Pinning + hash
+verification means even a compromised `main` can't push code to your fleet — but
+protected tags stop an attacker from re-pointing `v1.0.0` itself.
+
+> Need to override at install time? `--ref <tag>`, `--repo-base <url>`, and
+> `--sha256 <hash>` flags exist for one-off testing.
 
 ---
 
